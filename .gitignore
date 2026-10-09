@@ -1,0 +1,4 @@
+wp-config.php
+.env
+*.log
+*.zip

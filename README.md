@@ -16,15 +16,15 @@ On a federated WordPress site, Delete activities reached hundreds of known serve
 
 ## How it works
 
-Relay fanout and known-remote fanout are two separate mechanisms, and they can run together.
+Delivery happens in two separate ways, and they can run together.
 
-- **Relay fanout** adds the inboxes of accepted relays to an outgoing public activity and relies on each relay to pass it on.
-- **Known-remote fanout** sends directly to remote inboxes the site already knows about, minus the ones ActivityPub already selected and the relay inboxes.
+- **Relay delivery** adds the inboxes of accepted relays to an outgoing public activity and relies on each relay to pass it on.
+- **Direct delivery to known servers** sends straight to the inboxes of remote servers the site already knows about, minus the ones ActivityPub already selected and the relay inboxes. The code and the log call this known-remote fanout.
 
 ## What I learned
 
 - A logger can only record deliveries that actually happen. It cannot fix a delivery that never started.
-- Relay fanout and known-remote fanout are different things. Keeping them apart made every later bug easier to find.
+- Delivering through relays and delivering directly to known servers are different things. Keeping them apart made every later bug easier to find.
 - When a post does not federate, check whether WordPress created an outbox row first. No row means the publish trigger is at fault. A row that never delivers points at dispatch.
 - If WP-Cron is disabled, delivery depends on real server cron. This plugin can recover on ordinary requests, but check the schedule before blaming the plugin.
 

@@ -2,118 +2,30 @@
 /**
  * Plugin Name: Relay Control
  * Plugin URI: https://github.com/wrzky/relay-control
- * Description: Verified site-wide relay routing, stable actor keys, bounded delivery retries, automatic outbox recovery, deduplicated receipts and resumable known-remote fanout.
+ * Description: Delivers new posts through accepted relays and directly to known remote servers, with bounded retries, automatic outbox recovery, deduplicated receipts and one readable delivery log.
  * Version: 2.0.0
  * Author: WRZKY
  * Author URI: https://www.wrzky.com
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
  *
- * 2.0.0: Neutral-name release for public sharing. Site-specific prefixes were
- *        replaced with relay_control_. Settings are saved under the new names,
- *        so do not drop this over a site already running an earlier build. The
- *        short-post type used for /fedi/ updates is now relay_control_fedi_activity;
- *        it belongs to an optional companion plugin, so on other sites the hook
- *        that listens for it stays idle. The two local accounts the code used
- *        to assume (users 4 and 5) are now settings: relay_control_primary_user_id
- *        (default 5, or the companion plugin's answer) and
- *        relay_control_secondary_user_id (default none, which switches the
- *        secondary-account handling off). No other behaviour changes.
+ * Changelog
  *
- * 1.9.0: Use one site relay subscription for both actors; block and locally clean up relay Follows from the secondary account.
+ * 2.0.0  Public release. Names specific to one site were replaced with generic ones,
+ *        and settings are now saved under relay_control_*. Do not drop this over a
+ *        site that already runs an earlier build, because its saved settings use the
+ *        old names. The two local accounts the code used to assume are now settings:
+ *        relay_control_primary_user_id (default 5, or the companion plugin's answer)
+ *        and relay_control_secondary_user_id (default none, which switches
+ *        secondary-account handling off). The short-post type used for /fedi/
+ *        updates is relay_control_fedi_activity; it belongs to an optional companion
+ *        plugin, so on other sites the hook that listens for it stays idle.
  *
- * 1.8.15 (27 Sep 2026): Revalidate legacy holds, resume stalled work without
- * false completion, and persist worker admission before sending.
- *
- * 1.8.14 (26 Sep 2026): Rotate pending recovery so held items cannot starve
- * later work; validate native reconstructed activities and log recovery state.
- *
- * 1.8.13 (26 Sep 2026): Bind saved boosts to their originating user before
- * native dispatch and custom fanout; defer ambiguous ownership, never borrow
- * another actor's key or relay subscription. Keep five fanout slots.
- *
- * 1.8.12 (25 Sep 2026): Match activity actors to native signing users and
- * published keys; normalize only explicit local aliases, protect final
- * signatures, honor domain blocks and automatically retry recorded signature
- * failures once within a bounded recovery budget. Five fanout slots.
- *
- * 1.8.11 (25 Sep 2026): The whole regenerate-from-source-post approach
- * (1.8.7 through 1.8.10) is gone. The only thing ever wrong in a stale
- * item was the actor field -- a single string -- and rebuilding the
- * entire activity through the transformer to fix one field was never
- * necessary. It's also what caused every problem this mechanism had:
- * 634 source_unresolved lines across 249 distinct outbox IDs in one
- * log window (unreliable meta-based source lookup), transformer errors
- * on otherwise-fine activities, and Deletes that can never resolve a
- * source post by definition, since the post being gone is what makes
- * them a Delete. Now: decode the stored JSON, correct actor/
- * attributedTo in place wherever the old ?author= form appears, write
- * back. No source-post lookup, no transformer, works uniformly across
- * every activity type including Deletes.
- *
- * 1.8.10 (25 Sep 2026): 1.8.9's post-meta "permanently unresolved" flag
- * was itself wrong, confirmed live -- outbox_id 235554 got marked
- * unresolved and excluded forever, then the pre-existing single-item
- * backfill button successfully queued that same item seconds later
- * using its already-stored content. A Delete's source post is gone by
- * definition, so failing to find one to regenerate from doesn't mean
- * an item is broken. Replaced the permanent exclusion with the same
- * rotating, persisted cursor wrzky-relay-control.php's own
- * auto_recover_cooldowns() already uses: log and move past anything
- * that can't be handled this pass, wrap back to the start once the
- * cursor reaches the end, so everything is revisited over time and
- * nothing is ever permanently locked out.
- * 1.8.9 (25 Sep 2026): Caught live in the actual log after deploying
- * 1.8.7 -- outbox_ids 3171/3174/3177/3180/3198 logged
- * reason=source_unresolved every single minute, forever, because
- * nothing recorded a prior failed attempt. ORDER BY ID ASC kept
- * re-selecting the same permanently-unresolvable items, blocking this
- * batch from ever reaching anything past them.
- *
- * 1.8.8 (25 Sep 2026): The manual "Backfill recent public outbox items"
- * admin button was returning scanned=0 every time -- never actually
- * debugged, because the deeper problem was keeping it as a manual step
- * at all when automatic recovery already runs continuously. Folded its
- * logic into relay_control_recover_backlog() as a small,
- * bounded automatic pass instead, and removed the button, its form, and
- * its dead POST handler. The single-outbox-ID backfill button stays --
- * that one is a genuinely targeted manual tool, not something to
- * automate blindly.
- *
- * 1.8.7 (25 Sep 2026): Every fix to actor identity this session only
- * changes what gets built into NEW outbox items -- Outbox::get_activity()
- * reads post_content verbatim and never regenerates it, so anything
- * already queued or retried kept resending the exact same wrong actor
- * forever, no matter the fix. relay_control_recover_backlog()
- * now repairs a small bounded batch of stale outbox content (rebuilt
- * fresh from each item's current source post) on every pass, before
- * waking or rescheduling anything else -- so recovery works from
- * corrected content instead of perpetually resending the same failure.
- *
- * 1.8.6: Delete activities now go through the same relay fanout path as
- * Create/Update/Announce -- previously excluded outright, which meant a
- * post that reached a relay mirror (e.g. a Lemmy community) had no route
- * for its retraction to ever follow it there. Confirmed against a real
- * case: a post deleted from the site on 25 Sep 2026 stayed
- * visible on lemmy.ml indefinitely. Lemmy-side acceptance of a relayed
- * Delete is unconfirmed -- no Delete activity appears in the 24-25 Sep
- * logs to test against. Also: relay_control_delivery_recovery_tick reschedule
- * failures (41 occurrences, 24-25 Sep debug log, "could not be saved")
- * were silently discarded; now logged when they happen.
- * 1.8.5: Remove the dashboard recovery panel; keep automatic recovery running.
- * 1.8.4: Five fanout worker slots concentrate on one outbox at a time;
- * existing queues adopt the limit without resetting delivery progress.
- * 1.8.3: Separate background-worker transport diagnostics from federation
- * receipts; refresh queue state under locks, preserve interrupted checkpoints,
- * and resume existing chunks incorrectly stopped by the old watchdog.
- * 1.8.2: Failures-only delivery logging, including configured relays.
- * 1.8.1: Automatic first-request recovery and missed-cron fallback.
- * 1.8.0: Bounded delivery, shared attempt ledger and verified relay state.
- * 1.7.9: Added exact-URL inbox blocklist (relay_control_inbox_blocklist_urls)
- * alongside the existing hostname blocklist. Needed because dead endpoints can
- * share a host with still-working inboxes (e.g. wordpress.com sites all live
- * under public-api.wordpress.com), so blocking by host would take out working
- * deliveries too. Blocks wpcom site 179910553 (permanent 404 rest_no_route).
+ * 1.x    Internal versions. They added a single site-wide relay subscription, stable
+ *        actor keys, bounded delivery retries with a shared attempt ledger, automatic
+ *        outbox recovery with a missed-cron fallback, deduplicated receipts,
+ *        failure-only delivery logging, resumable known-remote fanout, and exact-URL
+ *        and hostname inbox blocklists.
  */
 
 if (!defined('ABSPATH')) {
@@ -895,19 +807,9 @@ function relay_control_relay_is_accepted($relay_inbox, $actor_id = null) {
 
 function relay_control_dispatch_type_allowed_for_relays($type) {
     $type = strtolower((string) $type);
-    // 'delete' added 25 Sep 2026: content that reached a Lemmy community
-    // (or any other mirror) purely through relay fanout, not a direct
-    // Follow, has no other path a retraction could take to reach it.
-    // Confirmed missing before this fix -- a genuinely deleted post stayed
-    // visible on lemmy.ml indefinitely because Delete never had a route
-    // there at all. AodeRelay itself relays Delete verbatim; whether a
-    // given receiving server accepts it depends on that server's own
-    // signature requirements, which is between it and the relay, not
-    // something to gate here. Unconfirmed against Lemmy specifically --
-    // no Delete activity appears in the 24-25 Sep logs to check against,
-    // so this closes the routing gap on the sending side but doesn't
-    // guarantee Lemmy's receiving side honours it. Worth watching the
-    // relay-delivery log after this ships for the first real Delete case.
+    // Delete is relayed too: content that reached a mirror purely through relay delivery, not a direct Follow, has no other path a retraction could take.
+    // Whether a receiving server honours the Delete depends on that server's own signature requirements, which is between it and the relay, so it is not gated here.
+    // This closes the routing gap on the sending side but cannot guarantee the receiving side honours it, so watch the relay delivery log for real Delete cases.
     return in_array($type, array('create', 'update', 'announce', 'delete'), true);
 }
 
@@ -1023,11 +925,8 @@ function relay_control_add_relay_inboxes($inboxes, $actor_id, $activity) {
 
     relay_control_log('[RELAY CONTROL] Relay dispatch entered activity=' . ($type !== '' ? $type : 'unknown') . ' actor_id=' . $actor_id . ' existing_inboxes=' . $existing_count . ' configured_relays=' . count($relays));
 
-    // Deliberate carve-out removed 25 Sep 2026 -- see
-    // dispatch_type_allowed_for_relays() for why. Delete now falls
-    // through to the same allowed-type and public-visibility checks
-    // every other relayed activity goes through below, rather than
-    // being special-cased out before either check runs.
+    // Delete goes through the same allowed-type and public-visibility checks as every other relayed activity, rather than being special-cased out before them.
+    // See relay_control_dispatch_type_allowed_for_relays() for why.
     if (!relay_control_dispatch_type_allowed_for_relays($type)) {
         relay_control_log('[RELAY CONTROL] Relay dispatch skipped reason=activity_type_not_allowed activity=' . ($type !== '' ? $type : 'unknown') . ' actor_id=' . $actor_id . ' existing_inboxes=' . $existing_count . ' configured_relays=' . count($relays));
         return $inboxes;
@@ -1143,10 +1042,8 @@ function relay_control_json_is_public($data) {
 }
 
 function relay_control_inbox_blocklist_hosts() {
-    // Hosts whose inboxes must never receive fanout/relay delivery.
-    // relay.toot.io rejects by policy (400) on every delivery, so it is
-    // pruned from ALL outbound paths here, including cached known-remote inboxes
-    // that survive after a relay subscription is removed.
+    // Hosts whose inboxes must never receive relay or direct delivery.
+    // relay.toot.io rejects every delivery by policy (HTTP 400), so it is pruned from all outbound paths here, including cached known-server inboxes that survive after a relay subscription is removed.
     $hosts = array('relay.toot.io');
     $hosts = apply_filters('relay_control_inbox_blocklist_hosts', $hosts);
     $clean = array();
@@ -1165,8 +1062,7 @@ function relay_control_inbox_blocklist_urls() {
     // wordpress.com sites all live under public-api.wordpress.com), so a
     // hostname-level block would be too broad.
     $urls = array(
-        // wpcom site 179910553: ActivityPub deactivated on that blog, permanent
-        // 404 rest_no_route on every delivery attempt (2026-07-07).
+        // A WordPress.com blog with ActivityPub deactivated: its inbox returns a permanent 404 (rest_no_route) on every delivery attempt.
         'https://public-api.wordpress.com/wpcom/activitypub-1.0/sites/179910553/inbox',
     );
     $urls = apply_filters('relay_control_inbox_blocklist_urls', $urls);
@@ -1184,7 +1080,7 @@ function relay_control_inbox_is_blocked($inbox, $user_id = 0) {
     $host = strtolower(rtrim((string) wp_parse_url((string) $inbox, PHP_URL_HOST), '.'));
     if ($host === '') { return false; }
     $domains = array_merge(array_keys(relay_control_inbox_blocklist_hosts()),
-        array('lemmy.world'), (array) get_option('activitypub_site_blocked_domains', array()),
+        (array) get_option('activitypub_site_blocked_domains', array()),
         $user_id > 0 ? (array) get_user_meta($user_id, 'activitypub_blocked_domains', true) : array());
     foreach ($domains as $domain) {
         if (!is_string($domain)) { continue; }
@@ -2378,11 +2274,7 @@ function relay_control_render_page() {
     echo '</form>';
 
     echo '<h2>Known-remote fanout backfill</h2>';
-    // 25 Sep 2026: the "recent" backfill button that used to live here is
-    // gone -- folded into relay_control_recover_backlog()
-    // as an automatic step on every recovery pass, so there is nothing
-    // left to click for that case. This form is for the one remaining,
-    // genuinely manual case: a specific ap_outbox ID known by number.
+    // Automatic recovery already catches recently published items on every pass, so this form is only for the one manual case: a specific ap_outbox ID known by number.
     echo '<p>Automatic recovery now catches recently published items missing a known-remote fanout queue on its own. Use this form only to force one specific outbox item by ID.</p>';
     echo '<form method="post" style="margin-top: 1em;">';
     wp_nonce_field('relay_control_known_remote_backfill_single');
@@ -2799,13 +2691,8 @@ function relay_control_recover_backlog() {
         relay_control_cleanup_secondary_subscriptions();
         relay_control_resume_stalled_retirements();
         relay_control_repair_stale_outbox_batch(5);
-        // 25 Sep 2026: folded in what the manual "Backfill recent public
-        // outbox items" admin button was for -- catching items that
-        // already finished normal AP-core delivery (no longer pending)
-        // but never got a known-remote fanout queue created at all,
-        // which the pending-backlog scan above doesn't cover since
-        // these aren't pending. Small, fixed, conservative bound on an
-        // automatic pass, unlike the manual form's user-set days/limit.
+        // Also catch items that finished normal ActivityPub delivery, so they are no longer pending, but never got a known-remote fanout queue.
+        // The pending-backlog scan above does not cover them. This is a small, fixed, conservative bound on an automatic pass.
         relay_control_known_remote_backfill_recent_outbox(2, 5, false);
         $ids = relay_control_pending_recovery_ids();
         if (is_wp_error($ids)) {
@@ -2857,14 +2744,8 @@ function relay_control_recovery_bootstrap() {
     remove_action('activitypub_process_outbox', array('Activitypub\\Dispatcher', 'process_outbox'));
     add_action('activitypub_process_outbox', 'relay_control_process_outbox');
     if (!wp_next_scheduled('relay_control_delivery_recovery_tick')) {
-        // 25 Sep 2026: this call's return was never checked -- 41
-        // "could not be saved" reschedule/unschedule failures for this
-        // exact hook appear in the 24-25 Sep debug log, all silently
-        // discarded. The circuit breaker above only guards against
-        // *already-observed* DB trouble; a write can still fail here
-        // even when the circuit hasn't tripped yet. The next init-hook
-        // call already retries this naturally, so this isn't a missing
-        // retry -- it's a missing record of the retry ever being needed.
+        // Check the return of this schedule call: a write can fail even when the circuit breaker above has not tripped, because the breaker only guards against database trouble already observed.
+        // The next init-hook call retries naturally, so the point is to record that a retry was needed, not to add one.
         $scheduled = wp_schedule_event(time() + 5, 'relay_control_every_minute', 'relay_control_delivery_recovery_tick', array(), true);
         if (!$scheduled || is_wp_error($scheduled)) {
             relay_control_log('[RELAY CONTROL] Recovery tick reschedule failed error=' . (is_wp_error($scheduled) ? $scheduled->get_error_code() : 'schedule_write_failed'));
@@ -2877,10 +2758,7 @@ add_action('init', 'relay_control_recovery_bootstrap', PHP_INT_MAX);
 // request starts recovery on shutdown; later requests repair missed cron runs.
 // This only scans bounded work and spawns background requests, never sends
 // remote federation deliveries synchronously in the visitor's request.
-// Event-driven trigger added 23 Sep 2026: same pattern as wrzky.com,
-// dispatch immediately on publish instead of waiting for the next poll,
-// alongside native WP-Cron (DISABLE_WP_CRON now false) rather than a
-// dedicated fixed-interval external trigger.
+// Event-driven trigger: dispatch immediately on publish instead of waiting for the next poll, alongside native WP-Cron, so no dedicated fixed-interval external trigger is needed.
 add_action('save_post_relay_control_fedi_activity', function ($post_id, $post) {
     if ($post->post_status !== 'publish' || wp_is_post_revision($post_id) || wp_is_post_autosave($post_id)) {
         return;
@@ -2963,22 +2841,15 @@ function relay_control_pending_create_dependency($post) {
     return empty($ids) ? 0 : (int) $ids[0];
 }
 
-// Event-driven immediate dispatch, added 23 Sep 2026: same as wrzky.com,
-// same day. Fire dispatch the instant a new fedi-activity post actually
-// publishes, instead of waiting on the next poll. Works with
-// DISABLE_WP_CRON now false, letting native cron fire opportunistically
-// on real inbound traffic instead of needing a dedicated fixed-interval
-// external trigger.
+// Event-driven dispatch: fire as soon as a new fedi-activity post publishes, instead of waiting on the next poll.
+// With native WP-Cron enabled it also fires opportunistically on real inbound traffic, so no dedicated fixed-interval external trigger is needed.
 add_action('transition_post_status', function ($new_status, $old_status, $post) {
     if ($new_status === 'publish' && $old_status !== 'publish' && $post->post_type === 'relay_control_fedi_activity') {
         if (function_exists('relay_control_bridge_db_circuit_open') && relay_control_bridge_db_circuit_open()) {
             return;
         }
-        // Debounced, not immediate: same fix as wrzky.com, same day. A
-        // burst of many posts (e.g. many boosts at once) firing that many
-        // concurrent dispatch runs is exactly the burst pattern
-        // abuse-protection watches for. One scheduled near-term event,
-        // only if one isn't already pending, coalesces any burst.
+        // Debounced, not immediate: a burst of many posts (for example many boosts at once) would fire as many concurrent dispatch runs, which is the burst pattern abuse protection watches for.
+        // One scheduled near-term event, only if none is already pending, coalesces any burst.
         if (!wp_next_scheduled('relay_control_debounced_dispatch')) {
             wp_schedule_single_event(time() + 10, 'relay_control_debounced_dispatch');
         }

@@ -1,6 +1,6 @@
 # Relay Control
 
-Relay and known-remote fanout for federated WordPress sites running the ActivityPub plugin. Built for a small mutual aid publishing network and used in production.
+Sends a WordPress site's new posts to more of the fediverse. By default, the ActivityPub plugin delivers new posts mostly to followers. Relay Control also delivers them to relays and to other servers the site already knows about. Built for a small mutual aid publishing network and used in production.
 
 ## The problem
 
